@@ -1,33 +1,87 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/gocolly/colly"
 )
 
+type EtfInfo struct {
+	Title              string
+	Replication        string
+	Earnings           string
+	TotalExpenseRatio  string
+	TrackingDifference string
+	FundSize           string
+}
+
 func main() {
-	// Instantiate default collector
-	c := colly.NewCollector(
-		// Visit only domains: hackerspaces.org, wiki.hackerspaces.org
-		colly.AllowedDomains("hackerspaces.org", "wiki.hackerspaces.org"),
-	)
 
-	// On every a element which has href attribute call callback
-	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
-		link := e.Attr("href")
-		// Print link
-		fmt.Printf("Link found: %q -> %s\n", e.Text, link)
-		// Visit link found on page
-		// Only those links are visited which are in AllowedDomains
-		c.Visit(e.Request.AbsoluteURL(link))
-	})
+	isins := []string{"IE00B1XNHC34", "IE00B4L5Y983", "LU1838002480"}
 
-	// Before making a request print "Visiting ..."
+	etfInfo := EtfInfo{}
+	etfInfos := make([]EtfInfo, 0, 1)
+
+	c := colly.NewCollector(colly.AllowedDomains("www.trackingdifferences.com", "trackingdifferences.com"))
+
 	c.OnRequest(func(r *colly.Request) {
-		fmt.Println("Visiting", r.URL.String())
+		r.Headers.Set("Accept-Language", "en-US;q=0.9")
+		fmt.Printf("Visiting %s\n", r.URL)
 	})
 
-	// Start scraping on https://hackerspaces.org
-	c.Visit("https://hackerspaces.org/")
+	c.OnError(func(r *colly.Response, e error) {
+		fmt.Printf("Error while scraping: %s\n", e.Error())
+	})
+
+	c.OnHTML("h1.page-title", func(h *colly.HTMLElement) {
+		etfInfo.Title = h.Text
+	})
+
+	c.OnHTML("div.descfloat p.desc", func(h *colly.HTMLElement) {
+		selection := h.DOM
+
+		childNodes := selection.Children().Nodes
+		if len(childNodes) == 3 {
+			description := cleanDesc(selection.Find("span.desctitle").Text())
+			value := selection.FindNodes(childNodes[2]).Text()
+
+			switch description {
+			case "Replication":
+				etfInfo.Replication = value
+			case "TER":
+				etfInfo.TotalExpenseRatio = value
+			case "TD":
+				etfInfo.TrackingDifference = value
+			case "Earnings":
+				etfInfo.Earnings = value
+			case "Fund size":
+				etfInfo.FundSize = value
+			}
+		}
+	})
+
+	c.OnScraped(func(r *colly.Response) {
+		etfInfos = append(etfInfos, etfInfo)
+		etfInfo = EtfInfo{}
+	})
+
+	for _, isin := range isins {
+		c.Visit(scrapeUrl(isin))
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", " ")
+	enc.Encode(etfInfos)
+
+}
+
+func cleanDesc(s string) string {
+	return strings.TrimSpace(s)
+}
+
+func scrapeUrl(isin string) string {
+	return "https://www.trackingdifferences.com/ETF/ISIN/" + isin
 }
